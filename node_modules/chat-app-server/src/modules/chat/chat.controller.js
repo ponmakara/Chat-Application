@@ -46,13 +46,8 @@ export const sendMessage = async (req, res) => {
     });
 
     const io = req.app.get("io");
-    const connectedUsers = req.app.get("connectedUsers");
-    const receiverSocketId = connectedUsers.get(receiverId);
 
-    if (receiverSocketId) {
-      io.to(receiverSocketId).emit("message:new", createdMessage);
-    }
-
+    io.to(`user:${receiverId}`).emit("message:new", createdMessage);
     io.to(`user:${req.user.id}`).emit("message:new", createdMessage);
 
     return res.status(201).json(createdMessage);

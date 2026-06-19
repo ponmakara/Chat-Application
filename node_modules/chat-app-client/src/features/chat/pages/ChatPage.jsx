@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../../context/AuthContext";
 import { setAuthToken } from "../../../lib/api";
-import { connectSocket, disconnectSocket } from "../../../lib/socket";
+import { connectSocket, disconnectSocket, getSocket } from "../../../lib/socket";
 import {
   fetchCurrentUser,
   updateCurrentUserRequest,
@@ -19,6 +19,98 @@ const NAV_ITEMS = [
   { id: "chats", label: "Chats" },
   { id: "contacts", label: "Contacts" },
   { id: "settings", label: "Settings" }
+];
+
+const CONVERSATION_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "unread", label: "Unread" },
+  { id: "active", label: "Active" }
+];
+
+const EMOJI_OPTIONS = [
+  "😀",
+  "😄",
+  "😂",
+  "😊",
+  "😍",
+  "😘",
+  "😎",
+  "😢",
+  "😡",
+  "👍",
+  "🙏",
+  "👏",
+  "🔥",
+  "❤️",
+  "🎉",
+  "💯"
+];
+
+const CHAT_EMOJI_OPTIONS = [
+  "\u{1F600}",
+  "\u{1F603}",
+  "\u{1F604}",
+  "\u{1F601}",
+  "\u{1F606}",
+  "\u{1F605}",
+  "\u{1F602}",
+  "\u{1F923}",
+  "\u{1F60A}",
+  "\u{1F607}",
+  "\u{1F642}",
+  "\u{1F609}",
+  "\u{1F60D}",
+  "\u{1F970}",
+  "\u{1F618}",
+  "\u{1F617}",
+  "\u{1F61C}",
+  "\u{1F61D}",
+  "\u{1F61B}",
+  "\u{1F60E}",
+  "\u{1F929}",
+  "\u{1F914}",
+  "\u{1F928}",
+  "\u{1F610}",
+  "\u{1F62D}",
+  "\u{1F622}",
+  "\u{1F625}",
+  "\u{1F624}",
+  "\u{1F621}",
+  "\u{1F620}",
+  "\u{1F631}",
+  "\u{1F62E}",
+  "\u{1F44B}",
+  "\u{1F44C}",
+  "\u{1F44D}",
+  "\u{1F44E}",
+  "\u{1F44F}",
+  "\u{1F64C}",
+  "\u{1F64F}",
+  "\u{1F4AA}",
+  "\u{2764}\u{FE0F}",
+  "\u{1F499}",
+  "\u{1F49A}",
+  "\u{1F49B}",
+  "\u{1F49C}",
+  "\u{1F495}",
+  "\u{1F494}",
+  "\u{1F48C}",
+  "\u{1F525}",
+  "\u{2728}",
+  "\u{1F389}",
+  "\u{1F38A}",
+  "\u{1F381}",
+  "\u{1F3C6}",
+  "\u{1F4AF}",
+  "\u{2705}",
+  "\u{2600}\u{FE0F}",
+  "\u{1F319}",
+  "\u{2B50}",
+  "\u{26A1}",
+  "\u{1F37B}",
+  "\u{2615}",
+  "\u{1F355}",
+  "\u{1F339}"
 ];
 
 const ICONS = {
@@ -62,6 +154,11 @@ const ICONS = {
       <circle cx="12" cy="5" r="1.8" fill="currentColor" />
       <circle cx="12" cy="12" r="1.8" fill="currentColor" />
       <circle cx="12" cy="19" r="1.8" fill="currentColor" />
+    </svg>
+  ),
+  back: (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   trash: (
@@ -109,6 +206,24 @@ const statusColors = {
 };
 
 const displayNameOf = (person) => person?.display_name || person?.username || "Unknown";
+
+const getPresenceStatus = (person, onlineUserIds) => {
+  if (!person || !onlineUserIds.includes(person.id)) {
+    return "offline";
+  }
+
+  return person.availability_status === "away" ? "away" : "available";
+};
+
+const getPresenceLabel = (person, onlineUserIds) => {
+  const status = getPresenceStatus(person, onlineUserIds);
+
+  if (status === "available") {
+    return "Active now";
+  }
+
+  return availabilityLabels[status] || "Offline";
+};
 
 const getInitials = (name = "") =>
   name
@@ -227,19 +342,39 @@ function ChatView(props) {
     sending,
     deletingMessageId,
     searchTerm,
+    activeFilter,
     onSearchChange,
     onSelectUser,
+    onFilterChange,
+    onBackToConversations,
     onDraftChange,
     onSendMessage,
     onDeleteMessage,
-    onlineUserIds
+    onlineUserIds,
+    isSelectedUserTyping,
+    isThreadOpen
   } = props;
 
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const emojiPickerRef = useRef(null);
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!emojiPickerRef.current?.contains(event.target)) {
+        setIsEmojiPickerOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -247,10 +382,40 @@ function ChatView(props) {
       return;
     }
     onSendMessage(draft);
+    setIsEmojiPickerOpen(false);
+  };
+
+  const handleEmojiSelect = (emoji) => {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? draft.length;
+    const nextDraft = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
+
+    onDraftChange(nextDraft);
+    requestAnimationFrame(() => {
+      input?.focus();
+      const cursorPosition = start + emoji.length;
+      input?.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  };
+
+  const handleFilePick = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    onDraftChange(`${draft}${draft ? " " : ""}\u{1F4CE} ${file.name}`);
+    event.target.value = "";
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const notifyUnavailable = (label) => {
+    window.alert(`${label} is not available in this demo yet.`);
   };
 
   return (
-    <section className="messenger-main">
+    <section className={`messenger-main ${isThreadOpen ? "mobile-thread-open" : ""}`}>
       <div className="conversation-pane">
         <div className="search-box">
           <span className="search-icon">{ICONS.search}</span>
@@ -262,15 +427,24 @@ function ChatView(props) {
         </div>
 
         <div className="filter-pills">
-          <button className="pill active">All</button>
-          <button className="pill">Unread</button>
-          <button className="pill">Groups</button>
+          {CONVERSATION_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              className={`pill ${activeFilter === filter.id ? "active" : ""}`}
+              onClick={() => onFilterChange(filter.id)}
+              type="button"
+            >
+              {filter.label}
+            </button>
+          ))}
         </div>
 
         <div className="conversation-list">
           {conversations.map((conversation) => {
             const isOnline = onlineUserIds.includes(conversation.id);
             const isSelected = selectedUser?.id === conversation.id;
+            const presenceStatus = getPresenceStatus(conversation, onlineUserIds);
+            const presenceLabel = getPresenceLabel(conversation, onlineUserIds);
 
             return (
               <button
@@ -283,18 +457,27 @@ function ChatView(props) {
                   imageUrl={conversation.profile_image_url}
                   size="lg"
                   showDot
-                  status={isOnline ? "available" : conversation.availability_status || "offline"}
+                  status={presenceStatus}
                 />
                 <div className="conversation-copy">
                   <div className="conversation-row">
                     <strong>{displayNameOf(conversation)}</strong>
-                    <span>{formatConversationTime(conversation.last_message_at)}</span>
+                    <span>{formatConversationTime(conversation.last_message_at) || presenceLabel}</span>
                   </div>
-                  <p>{conversation.last_message || conversation.headline || "Start a conversation"}</p>
+                  <p>
+                    <span className={`presence-text ${isOnline ? "online" : ""}`}>{presenceLabel}</span>
+                    <span>{conversation.last_message || conversation.headline || "Start a conversation"}</span>
+                  </p>
                 </div>
               </button>
             );
           })}
+          {conversations.length === 0 ? (
+            <div className="empty-list-note">
+              <strong>No conversations found</strong>
+              <span>Try another search or filter.</span>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -302,32 +485,53 @@ function ChatView(props) {
         {selectedUser ? (
           <>
             <header className="thread-header">
+              <button
+                type="button"
+                className="mobile-back-button"
+                onClick={onBackToConversations}
+                aria-label="Back to conversations"
+              >
+                {ICONS.back}
+              </button>
               <div className="thread-identity">
                 <Avatar
                   name={displayNameOf(selectedUser)}
                   imageUrl={selectedUser.profile_image_url}
                   size="lg"
                   showDot
-                  status={
-                    onlineUserIds.includes(selectedUser.id)
-                      ? "available"
-                      : selectedUser.availability_status || "offline"
-                  }
+                  status={getPresenceStatus(selectedUser, onlineUserIds)}
                 />
                 <div>
                   <strong>{displayNameOf(selectedUser)}</strong>
-                  <span>
-                    {onlineUserIds.includes(selectedUser.id)
-                      ? "Active Now"
-                      : availabilityLabels[selectedUser.availability_status || "offline"]}
-                  </span>
+                  <span>{getPresenceLabel(selectedUser, onlineUserIds)}</span>
                 </div>
               </div>
 
               <div className="thread-actions">
-                <button className="icon-button">{ICONS.phone}</button>
-                <button className="icon-button">{ICONS.video}</button>
-                <button className="icon-button">{ICONS.more}</button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => notifyUnavailable("Voice call")}
+                  title="Voice call"
+                >
+                  {ICONS.phone}
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => notifyUnavailable("Video call")}
+                  title="Video call"
+                >
+                  {ICONS.video}
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => notifyUnavailable("More actions")}
+                  title="More actions"
+                >
+                  {ICONS.more}
+                </button>
               </div>
             </header>
 
@@ -362,31 +566,67 @@ function ChatView(props) {
                 );
               })}
 
-              {selectedUser && onlineUserIds.includes(selectedUser.id) ? (
+              {selectedUser && isSelectedUserTyping ? (
                 <div className="typing-row">
                   <div className="typing-pill">
                     <span />
                     <span />
                     <span />
                   </div>
-                  <small>{displayNameOf(selectedUser)} is active now...</small>
+                  <small>{displayNameOf(selectedUser)} is typing...</small>
                 </div>
               ) : null}
             </div>
 
             <div className="composer-wrap">
               <form className="message-composer" onSubmit={handleSubmit}>
-                <button type="button" className="composer-icon-button">
+                <button
+                  type="button"
+                  className="composer-icon-button"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach file"
+                >
                   {ICONS.plus}
                 </button>
                 <input
+                  ref={fileInputRef}
+                  className="hidden-file-input"
+                  type="file"
+                  onChange={handleFilePick}
+                />
+                <input
+                  ref={inputRef}
                   placeholder="Type a message..."
                   value={draft}
                   onChange={(event) => onDraftChange(event.target.value)}
                 />
-                <button type="button" className="composer-icon-button">
-                  {ICONS.smile}
-                </button>
+                <div className="emoji-picker-wrap" ref={emojiPickerRef}>
+                  <button
+                    type="button"
+                    className={`composer-icon-button emoji-toggle ${isEmojiPickerOpen ? "active" : ""}`}
+                    onClick={() => setIsEmojiPickerOpen((current) => !current)}
+                    aria-label="Choose emoji"
+                    aria-expanded={isEmojiPickerOpen}
+                  >
+                    {ICONS.smile}
+                  </button>
+                  {isEmojiPickerOpen ? (
+                    <div className="emoji-picker" role="menu" aria-label="Emoji picker">
+                      {CHAT_EMOJI_OPTIONS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          className="emoji-option"
+                          onClick={() => handleEmojiSelect(emoji)}
+                          role="menuitem"
+                          aria-label={`Insert ${emoji}`}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
                 <button className="send-button" type="submit" disabled={sending}>
                   {ICONS.send}
                 </button>
@@ -431,19 +671,23 @@ function ContactsView({ users, onlineUserIds, searchTerm, onSearchChange, onOpen
       </div>
 
       <div className="recent-grid">
-        {recentlyActive.map((person) => (
-          <div key={person.id} className="recent-card">
-            <Avatar
-              name={displayNameOf(person)}
-              imageUrl={person.profile_image_url}
-              size="xl"
-              showDot
-              status={onlineUserIds.includes(person.id) ? "available" : person.availability_status || "offline"}
-            />
-            <strong>{displayNameOf(person)}</strong>
-            <span>{person.headline || person.email}</span>
-          </div>
-        ))}
+        {recentlyActive.map((person) => {
+          const presenceLabel = getPresenceLabel(person, onlineUserIds);
+
+          return (
+            <div key={person.id} className="recent-card">
+              <Avatar
+                name={displayNameOf(person)}
+                imageUrl={person.profile_image_url}
+                size="xl"
+                showDot
+                status={getPresenceStatus(person, onlineUserIds)}
+              />
+              <strong>{displayNameOf(person)}</strong>
+              <span>{presenceLabel}</span>
+            </div>
+          );
+        })}
       </div>
 
       <div className="contacts-table">
@@ -459,36 +703,39 @@ function ContactsView({ users, onlineUserIds, searchTerm, onSearchChange, onOpen
             <span>Actions</span>
           </div>
 
-          {users.map((person) => (
-            <div key={person.id} className="contacts-row">
-              <div className="contact-person">
-                <Avatar
-                  name={displayNameOf(person)}
-                  imageUrl={person.profile_image_url}
-                  size="md"
-                  showDot
-                  status={onlineUserIds.includes(person.id) ? "available" : person.availability_status || "offline"}
-                />
-                <div>
-                  <strong>{displayNameOf(person)}</strong>
-                  <span>{person.headline || person.email}</span>
+          {users.map((person) => {
+            const presenceStatus = getPresenceStatus(person, onlineUserIds);
+            const presenceLabel = getPresenceLabel(person, onlineUserIds);
+
+            return (
+              <div key={person.id} className="contacts-row">
+                <div className="contact-person">
+                  <Avatar
+                    name={displayNameOf(person)}
+                    imageUrl={person.profile_image_url}
+                    size="md"
+                    showDot
+                    status={presenceStatus}
+                  />
+                  <div>
+                    <strong>{displayNameOf(person)}</strong>
+                    <span>{person.headline || person.email}</span>
+                  </div>
+                </div>
+
+                <span className={`contact-status ${presenceStatus === "available" ? "online" : ""}`}>
+                  {presenceLabel}
+                </span>
+
+                <div className="contact-actions">
+                  <button className="message-action" onClick={() => onOpenChat(person)}>
+                    Message
+                  </button>
+                  <button className="icon-button compact">{ICONS.phone}</button>
                 </div>
               </div>
-
-              <span className={`contact-status ${onlineUserIds.includes(person.id) ? "online" : ""}`}>
-                {onlineUserIds.includes(person.id)
-                  ? "Active now"
-                  : availabilityLabels[person.availability_status || "offline"]}
-              </span>
-
-              <div className="contact-actions">
-                <button className="message-action" onClick={() => onOpenChat(person)}>
-                  Message
-                </button>
-                <button className="icon-button compact">{ICONS.phone}</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>
@@ -717,6 +964,14 @@ function ChatPage() {
   const [draft, setDraft] = useState("");
   const [conversationSearch, setConversationSearch] = useState("");
   const [contactSearch, setContactSearch] = useState("");
+  const [conversationFilter, setConversationFilter] = useState("all");
+  const [isThreadOpen, setIsThreadOpen] = useState(false);
+  const [typingUserIds, setTypingUserIds] = useState([]);
+  const typingTimeoutRef = useRef(null);
+  const isTypingRef = useRef(false);
+
+  const mergeUserCollection = (collection, updatedUser) =>
+    collection.map((item) => (item.id === updatedUser.id ? { ...item, ...updatedUser } : item));
 
   useEffect(() => {
     setAuthToken(token);
@@ -753,6 +1008,21 @@ function ChatPage() {
   }, [selectedUser]);
 
   useEffect(() => {
+    const socket = getSocket();
+
+    if (socket && selectedUser && isTypingRef.current) {
+      socket.emit("typing:stop", { to: selectedUser.id });
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    isTypingRef.current = false;
+  }, [selectedUser?.id]);
+
+  useEffect(() => {
     const socket = connectSocket(token);
     if (!socket) {
       return undefined;
@@ -765,6 +1035,18 @@ function ChatPage() {
 
     const handleOnlineUsers = (userIds) => setOnlineUserIds(userIds);
 
+    const handleUserUpdated = (updatedUser) => {
+      setUsers((current) => mergeUserCollection(current, updatedUser));
+      setConversations((current) => mergeUserCollection(current, updatedUser));
+      setSelectedUser((current) =>
+        current?.id === updatedUser.id ? { ...current, ...updatedUser } : current
+      );
+
+      if (updatedUser.id === user.id) {
+        updateUser(normalizeProfile(updatedUser));
+      }
+    };
+
     const handleNewMessage = (message) => {
       if (
         selectedUser &&
@@ -775,6 +1057,7 @@ function ChatPage() {
           current.some((item) => item.id === message.id) ? current : [...current, message]
         );
       }
+      setTypingUserIds((current) => current.filter((userId) => userId !== message.sender_id));
       refreshConversations();
     };
 
@@ -789,31 +1072,63 @@ function ChatPage() {
       refreshConversations();
     };
 
+    const handleTypingStart = ({ from }) => {
+      setTypingUserIds((current) => (current.includes(from) ? current : [...current, from]));
+    };
+
+    const handleTypingStop = ({ from }) => {
+      setTypingUserIds((current) => current.filter((userId) => userId !== from));
+    };
+
     socket.on("users:online", handleOnlineUsers);
+    socket.on("user:updated", handleUserUpdated);
     socket.on("message:new", handleNewMessage);
     socket.on("message:deleted", handleDeletedMessage);
+    socket.on("typing:start", handleTypingStart);
+    socket.on("typing:stop", handleTypingStop);
 
     return () => {
       socket.off("users:online", handleOnlineUsers);
+      socket.off("user:updated", handleUserUpdated);
       socket.off("message:new", handleNewMessage);
       socket.off("message:deleted", handleDeletedMessage);
+      socket.off("typing:start", handleTypingStart);
+      socket.off("typing:stop", handleTypingStop);
     };
-  }, [selectedUser, token, user.id]);
+  }, [selectedUser, token, updateUser, user.id]);
 
   useEffect(() => () => disconnectSocket(), []);
+
+  useEffect(
+    () => () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   const filteredConversations = useMemo(() => {
     const source = conversations.length > 0 ? conversations : users;
     const term = conversationSearch.trim().toLowerCase();
-    if (!term) {
-      return source;
+    const searched = term
+      ? source.filter((item) =>
+          [displayNameOf(item), item.email, item.last_message, item.headline]
+            .filter(Boolean)
+            .some((value) => value.toLowerCase().includes(term))
+        )
+      : source;
+
+    if (conversationFilter === "unread") {
+      return searched.filter((item) => item.last_message && item.last_sender_id !== user.id);
     }
-    return source.filter((item) =>
-      [displayNameOf(item), item.email, item.last_message, item.headline]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(term))
-    );
-  }, [conversations, users, conversationSearch]);
+
+    if (conversationFilter === "active") {
+      return searched.filter((item) => onlineUserIds.includes(item.id));
+    }
+
+    return searched;
+  }, [conversations, users, conversationSearch, conversationFilter, onlineUserIds, user.id]);
 
   const filteredContacts = useMemo(() => {
     const term = contactSearch.trim().toLowerCase();
@@ -833,6 +1148,15 @@ function ChatPage() {
     }
     try {
       setSending(true);
+      const socket = getSocket();
+      if (socket && isTypingRef.current) {
+        socket.emit("typing:stop", { to: selectedUser.id });
+        isTypingRef.current = false;
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
       const message = await sendMessageRequest(selectedUser.id, messageText.trim());
       setMessages((current) =>
         current.some((item) => item.id === message.id) ? current : [...current, message]
@@ -845,6 +1169,46 @@ function ChatPage() {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleDraftChange = (value) => {
+    setDraft(value);
+
+    if (!selectedUser) {
+      return;
+    }
+
+    const socket = getSocket();
+    if (!socket) {
+      return;
+    }
+
+    if (!value.trim()) {
+      if (isTypingRef.current) {
+        socket.emit("typing:stop", { to: selectedUser.id });
+        isTypingRef.current = false;
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    if (!isTypingRef.current) {
+      socket.emit("typing:start", { to: selectedUser.id });
+      isTypingRef.current = true;
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit("typing:stop", { to: selectedUser.id });
+      isTypingRef.current = false;
+      typingTimeoutRef.current = null;
+    }, 1200);
   };
 
   const handleSaveProfile = async (form, avatarFile = null) => {
@@ -877,7 +1241,20 @@ function ChatPage() {
 
   const handleOpenChat = (person) => {
     setSelectedUser(person);
+    setIsThreadOpen(true);
     setActiveView("chats");
+  };
+
+  const handleSelectConversation = (person) => {
+    setSelectedUser(person);
+    setIsThreadOpen(true);
+  };
+
+  const handleChangeView = (view) => {
+    setActiveView(view);
+    if (view !== "chats") {
+      setIsThreadOpen(false);
+    }
   };
 
   const handleDeleteMessage = async (messageId) => {
@@ -904,7 +1281,7 @@ function ChatPage() {
     <main className="messenger-shell">
       <AppNavigation
         activeView={activeView}
-        onChangeView={setActiveView}
+        onChangeView={handleChangeView}
         currentUser={normalizeProfile(user)}
         onLogout={handleLogout}
       />
@@ -919,12 +1296,17 @@ function ChatPage() {
           sending={sending}
           deletingMessageId={deletingMessageId}
           searchTerm={conversationSearch}
+          activeFilter={conversationFilter}
           onSearchChange={setConversationSearch}
-          onSelectUser={setSelectedUser}
-          onDraftChange={setDraft}
+          onSelectUser={handleSelectConversation}
+          onFilterChange={setConversationFilter}
+          onBackToConversations={() => setIsThreadOpen(false)}
+          onDraftChange={handleDraftChange}
           onSendMessage={handleSendMessage}
           onDeleteMessage={handleDeleteMessage}
           onlineUserIds={onlineUserIds}
+          isSelectedUserTyping={selectedUser ? typingUserIds.includes(selectedUser.id) : false}
+          isThreadOpen={isThreadOpen}
         />
       ) : null}
 

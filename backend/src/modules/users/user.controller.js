@@ -61,6 +61,7 @@ export const updateCurrentUser = async (req, res) => {
     }
 
     const user = await updateUserProfile(req.user.id, payload);
+    req.app.get("io").emit("user:updated", user);
     return res.status(200).json(user);
   } catch (error) {
     return res
@@ -78,6 +79,7 @@ export const uploadCurrentUserAvatar = async (req, res) => {
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     const profileImageUrl = `${baseUrl}/uploads/avatars/${req.file.filename}`;
     const user = await updateUserProfileImage(req.user.id, profileImageUrl);
+    req.app.get("io").emit("user:updated", user);
 
     return res.status(200).json(user);
   } catch (error) {
